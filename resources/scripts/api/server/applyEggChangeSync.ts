@@ -48,7 +48,9 @@ export default async (uuid: string, data: ApplyEggChangeData): Promise<void> => 
             }
 
             if (startup_command) {
-                console.warn('Custom startup command update not supported for Wings daemon - using egg default');
+                await http.put(`/api/client/servers/${daemonType}/${uuid}/startup/command`, {
+                    startup: startup_command,
+                });
             }
 
             const envPromises = Object.entries(environment).map(([key, value]) =>

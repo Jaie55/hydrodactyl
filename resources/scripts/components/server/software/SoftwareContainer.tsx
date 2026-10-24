@@ -274,19 +274,28 @@ const SoftwareContainer = () => {
                       ? eggPreview.docker_images[eggPreview.default_docker_image]
                       : '';
 
+            const editableVariables = new Set(
+                eggPreview.variables
+                    .filter((variable) => variable.user_viewable && variable.user_editable)
+                    .map((variable) => variable.env_variable),
+            );
+
             const filteredEnvironment: Record<string, string> = {};
             Object.entries(pendingVariables).forEach(([key, value]) => {
-                if (value && value.trim() !== '') {
+                if (editableVariables.has(key) && value && value.trim() !== '') {
                     filteredEnvironment[key] = value;
                 }
             });
+
+            const startupCommand =
+                customStartup && customStartup !== eggPreview.egg.startup ? customStartup : undefined;
 
             if (daemonType?.toLowerCase() === 'elytra') {
                 const response = await applyEggChange(uuid, {
                     egg_id: selectedEgg.attributes.id,
                     nest_id: selectedNest.attributes.id,
                     docker_image: actualDockerImage,
-                    startup_command: customStartup,
+                    startup_command: startupCommand,
                     environment: filteredEnvironment,
                     should_backup: shouldBackup,
                     should_wipe: shouldWipe,
@@ -299,12 +308,14 @@ const SoftwareContainer = () => {
                     egg_id: selectedEgg.attributes.id,
                     nest_id: selectedNest.attributes.id,
                     docker_image: actualDockerImage,
-                    startup_command: customStartup,
+                    startup_command: startupCommand,
                     environment: filteredEnvironment,
                     should_backup: shouldBackup,
                     should_wipe: shouldWipe,
                     backup_name: t('server.software.backup_name'),
                 });
+
+                mutate();
             }
 
             toast.success(t('server.software.operation_started'));

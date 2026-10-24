@@ -3,8 +3,11 @@
 namespace Pterodactyl\Tests\Integration\Api\Client\Server;
 
 use Illuminate\Http\Response;
+use Pterodactyl\Models\Egg;
+use Pterodactyl\Models\Nest;
 use Pterodactyl\Models\Server;
 use Pterodactyl\Models\Permission;
+use Pterodactyl\Models\EggVariable;
 use Pterodactyl\Repositories\Wings\DaemonServerRepository;
 use Pterodactyl\Tests\Integration\Api\Client\ClientApiIntegrationTestCase;
 
@@ -108,6 +111,70 @@ class SettingsControllerTest extends ClientApiIntegrationTestCase
 
         $server = $server->refresh();
         $this->assertTrue($server->isInstalled());
+    }
+
+    /**
+     * Test that changing the egg synchronizes the startup command, the docker
+     * image and the server variables with the new egg.
+     */
+    public function testServerEggCanBeChangedAndVariablesAreSynchronized()
+    {
+        /** @var Server $server */
+        [$user, $server] = $this->generateTestAccount([Permission::ACTION_STARTUP_SOFTWARE]);
+
+        $nest = Nest::factory()->create();
+        $egg = Egg::factory()->for($nest)->create([
+            'startup' => 'java -jar new.jar',
+            'docker_images' => ['Java 21' => 'ghcr.io/pterodactyl/test:java21'],
+        ]);
+        $variable = EggVariable::factory()->create([
+            'egg_id' => $egg->id,
+            'env_variable' => 'NEW_VARIABLE',
+            'default_value' => 'default-value',
+            'user_viewable' => true,
+            'user_editable' => true,
+            'rules' => 'required|string',
+        ]);
+
+        $this->actingAs($user)
+            ->putJson("/api/client/servers/wings/{$server->uuid}/settings/egg", [
+                'egg_id' => $egg->id,
+                'nest_id' => $nest->id,
+            ])
+            ->assertStatus(Response::HTTP_NO_CONTENT);
+
+        $server = $server->refresh();
+
+        $this->assertSame($egg->id, $server->egg_id);
+        $this->assertSame($nest->id, $server->nest_id);
+        $this->assertSame('java -jar new.jar', $server->startup);
+        $this->assertSame('ghcr.io/pterodactyl/test:java21', $server->image);
+
+        $this->assertDatabaseHas('server_variables', [
+            'server_id' => $server->id,
+            'variable_id' => $variable->id,
+            'variable_value' => 'default-value',
+        ]);
+    }
+
+    /**
+     * Test that an egg from a different nest cannot be assigned.
+     */
+    public function testServerEggCannotBeChangedToAnEggOutsideTheNest()
+    {
+        /** @var Server $server */
+        [$user, $server] = $this->generateTestAccount([Permission::ACTION_STARTUP_SOFTWARE]);
+
+        $egg = Egg::factory()->for(Nest::factory()->create())->create([
+            'docker_images' => ['Java 21' => 'ghcr.io/pterodactyl/test:java21'],
+        ]);
+
+        $this->actingAs($user)
+            ->putJson("/api/client/servers/wings/{$server->uuid}/settings/egg", [
+                'egg_id' => $egg->id,
+                'nest_id' => Nest::factory()->create()->id,
+            ])
+            ->assertStatus(Response::HTTP_BAD_REQUEST);
     }
 
     public static function renamePermissionsDataProvider(): array

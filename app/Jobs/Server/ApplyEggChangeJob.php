@@ -19,6 +19,7 @@ use Pterodactyl\Models\ServerOperation;
 use Pterodactyl\Services\Servers\ReinstallServerService;
 use Pterodactyl\Services\Elytra\ElytraJobService;
 use Pterodactyl\Services\Servers\StartupModificationService;
+use Pterodactyl\Services\Servers\EggVariableSyncService;
 use Pterodactyl\Repositories\Wings\DaemonFileRepository;
 use Pterodactyl\Exceptions\Service\Backup\BackupFailedException;
 use Pterodactyl\Services\ServerOperations\ServerOperationService;
@@ -63,6 +64,7 @@ class ApplyEggChangeJob extends Job implements ShouldQueue
         ElytraJobService $elytraJobService,
         ReinstallServerService $reinstallServerService,
         StartupModificationService $startupModificationService,
+        EggVariableSyncService $variableSyncService,
         DaemonFileRepository $fileRepository,
         ServerOperationService $operationService,
         SubdomainManagementService $subdomainService
@@ -100,7 +102,7 @@ class ApplyEggChangeJob extends Job implements ShouldQueue
                 $this->wipeServerFiles($fileRepository, $operation);
             }
 
-            $this->applyServerChanges($egg, $startupModificationService, $reinstallServerService, $operation, $subdomainService);
+            $this->applyServerChanges($egg, $startupModificationService, $variableSyncService, $reinstallServerService, $operation, $subdomainService);
 
             $this->logSuccessfulChange();
 
@@ -265,13 +267,14 @@ class ApplyEggChangeJob extends Job implements ShouldQueue
     private function applyServerChanges(
         Egg $egg,
         StartupModificationService $startupModificationService,
+        EggVariableSyncService $variableSyncService,
         ReinstallServerService $reinstallServerService,
         ServerOperation $operation,
         SubdomainManagementService $subdomainService
     ): void {
         $operation->updateProgress(__('exceptions.server_operations.progress_applying_config'));
 
-        DB::transaction(function () use ($egg, $startupModificationService, $reinstallServerService, $operation, $subdomainService) {
+        DB::transaction(function () use ($egg, $startupModificationService, $variableSyncService, $reinstallServerService, $operation, $subdomainService) {
             // Check if we need to remove subdomain before changing egg
             $activeSubdomain = $this->server->activeSubdomain;
             if ($activeSubdomain) {
@@ -316,10 +319,22 @@ class ApplyEggChangeJob extends Job implements ShouldQueue
                 ]);
             }
 
+            $variableSyncService->handle($this->server, $egg);
+
+            // Keep the egg defaults for every variable the client did not
+            // provide (read-only ones included) instead of blanking them.
+            $environment = $egg->variables->mapWithKeys(function ($variable) {
+                return [
+                    $variable->env_variable => $this->environment[$variable->env_variable]
+                        ?? $variable->default_value
+                        ?? '',
+                ];
+            })->all();
+
             $updateData = [
                 'startup' => $this->startupCommand ?: $egg->startup,
                 'docker_image' => $this->dockerImage,
-                'environment' => $this->environment,
+                'environment' => $environment,
             ];
 
             $updatedServer = $startupModificationService
